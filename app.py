@@ -500,7 +500,14 @@ def generate_candidate_queries(keyword: str, experience_levels: list, industries
     """Generate Serper.dev search queries using Google dork syntax.
     Each round produces DIFFERENT queries to avoid duplicate results."""
     queries = []
+
+    # Sanitize keyword: remove special characters that break Google dorking
     kw = keyword.strip()
+    # Replace common separators with spaces
+    for char in ['&', '+', '/', '\\', '|', ';', ':', ',']:
+        kw = kw.replace(char, ' ')
+    # Collapse multiple spaces
+    kw = ' '.join(kw.split())
 
     if round_num == 0:
         queries = [
@@ -1106,7 +1113,69 @@ def enrich_discovered_profiles(discovered: list, apify_manager: ApifyKeyManager,
         f"✅ Enriched {enriched_count}/{len(urls_to_enrich)} profiles — Cost: {apify_manager.get_cost_summary()}"
     )
 
+    # Post-enrichment: extract missing fields from text
+    for p in result:
+        _post_enrich_extract(p)
+
     return result
+
+
+def _post_enrich_extract(profile: dict) -> dict:
+    """Extract missing fields from headline/about text when Apify returns limited data."""
+
+    # --- Extract company and role from headline ---
+    headline = profile.get("headline", "")
+    if headline and not profile.get("current_company"):
+        if " at " in headline:
+            parts = headline.split(" at ", 1)
+            if len(parts) == 2:
+                if not profile.get("current_role"):
+                    profile["current_role"] = parts[0].strip()
+                profile["current_company"] = parts[1].strip().split("|")[0].strip().split("·")[0].strip()
+        elif " | " in headline:
+            parts = headline.split(" | ", 1)
+            if len(parts) == 2:
+                if not profile.get("current_role"):
+                    profile["current_role"] = parts[0].strip()
+                profile["current_company"] = parts[1].strip()
+        elif " - " in headline:
+            parts = headline.split(" - ", 1)
+            if len(parts) == 2:
+                if not profile.get("current_role"):
+                    profile["current_role"] = parts[0].strip()
+                profile["current_company"] = parts[1].strip()
+
+    # If we still don't have a role, use the full headline
+    if not profile.get("current_role") and headline:
+        profile["current_role"] = headline[:80]
+
+    # --- Copy organization to current_company if missing ---
+    if not profile.get("current_company") and profile.get("organization"):
+        profile["current_company"] = profile["organization"]
+
+    # --- Extract skills from about/snippet if skills list is empty ---
+    if not profile.get("skills") or len(profile.get("skills", [])) == 0:
+        about = profile.get("about", "") or profile.get("snippet", "")
+        if about:
+            skills_match = re.search(r'(?:skills?|expertise|specialit(?:y|ies))[\s:]+([^\n.]+)', about, re.IGNORECASE)
+            if skills_match:
+                raw_skills = skills_match.group(1)
+                profile["skills"] = [s.strip() for s in re.split(r'[,•·|]', raw_skills) if s.strip() and len(s.strip()) > 2][:8]
+
+    # --- Ensure full_name is set ---
+    if not profile.get("full_name"):
+        profile["full_name"] = profile.get("name", "Unknown")
+
+    # --- Normalize connections ---
+    conn = profile.get("connections", 0)
+    if isinstance(conn, str):
+        conn_clean = conn.replace("+", "").replace(",", "").strip()
+        try:
+            profile["connections"] = int(conn_clean)
+        except ValueError:
+            profile["connections"] = 0
+
+    return profile
 
 
 # ============================================================
@@ -1632,15 +1701,16 @@ def smart_candidate_search(
                 st.warning(f"\u26a0\ufe0f Gemini call limit reached ({MAX_GEMINI_CALLS})")
                 break
 
-            # ---- Round header ----
-            with st.container():
-                st.markdown(f"---")
-                st.markdown(f"**\U0001f504 Round {round_num + 1}/{MAX_ROUNDS}** \u2014 {len(all_profiles)}/{target_count} candidates so far")
+            # ---- Round: wrap in st.status() for clean, collapsible output ----
+            with st.status(
+                f"\U0001f504 Round {round_num + 1}/{MAX_ROUNDS} \u2014 {len(all_profiles)}/{target_count} candidates",
+                expanded=True
+            ) as round_status:
 
                 # ---- STEP 1: Discover via Serper.dev ----
                 round_profiles = discover_via_serper(
                     search_keyword, experience_filter, industry_filter, city_filter,
-                    serper_key, st, round_num
+                    serper_key, round_status, round_num
                 )
 
                 # Track query count
@@ -1651,7 +1721,11 @@ def smart_candidate_search(
 
                 if not round_profiles:
                     consecutive_empty += 1
-                    st.write(f"\u26aa Round {round_num + 1}: No new profiles found")
+                    round_status.write(f"\u26aa Round {round_num + 1}: No new profiles found")
+                    round_status.update(
+                        label=f"\u26aa Round {round_num + 1} \u2014 No new profiles",
+                        state="complete"
+                    )
                     progress = min(len(all_profiles) / max(target_count, 1), 1.0)
                     progress_bar.progress(progress, text=f"Found {len(all_profiles)}/{target_count}...")
                     time.sleep(0.5)
@@ -1662,7 +1736,7 @@ def smart_candidate_search(
                 # ---- STEP 2: Deduplicate ----
                 round_profiles, dedup_count = deduplicate_profiles(round_profiles, dedup_urls, dedup_names)
                 if dedup_count:
-                    st.write(f"\U0001f504 Removed {dedup_count} duplicates")
+                    round_status.write(f"\U0001f504 Removed {dedup_count} duplicates")
 
                 # Also dedup against already-found profiles this search
                 new_profiles = []
@@ -1672,26 +1746,31 @@ def smart_candidate_search(
                 round_profiles = new_profiles
 
                 if not round_profiles:
-                    st.write(f"\u26aa Round {round_num + 1}: All profiles were duplicates")
+                    round_status.write(f"\u26aa Round {round_num + 1}: All profiles were duplicates")
+                    round_status.update(
+                        label=f"\u26aa Round {round_num + 1} \u2014 All duplicates",
+                        state="complete"
+                    )
                     time.sleep(0.5)
                     continue
 
                 # ---- STEP 3: Enrich via Apify ----
                 if apify_manager.has_keys() and not apify_manager.is_exhausted() and total_apify_scrapes < MAX_APIFY_SCRAPES:
                     # Warn before using paid key
-                    if apify_manager._current_key_idx is not None:
-                        current_key_info = apify_manager._keys[apify_manager._current_key_idx]
-                        if current_key_info.get("is_paid", False):
-                            st.warning("\u26a0\ufe0f Now using PAID Apify key. Monitor costs carefully.")
+                    if apify_manager.is_using_paid_key():
+                        round_status.write("\u26a0\ufe0f Now using PAID Apify key. Monitor costs carefully.")
 
                     round_profiles = enrich_discovered_profiles(
-                        round_profiles, apify_manager, st
+                        round_profiles, apify_manager, round_status
                     )
                     total_apify_scrapes += len(round_profiles)
-                    st.caption(f"\U0001f4b0 Apify cost so far: {apify_manager.get_cost_summary()}")
+                    round_status.write(f"\U0001f4b0 Apify cost so far: {apify_manager.get_cost_summary()}")
                 else:
                     for p in round_profiles:
                         p["enrichment_status"] = "serper_only"
+                    # For serper_only profiles, also extract from headline/snippet
+                    for p in round_profiles:
+                        _post_enrich_extract(p)
 
                 # ---- STEP 4: Smart Filters ----
                 round_profiles = apply_smart_filters(
@@ -1700,18 +1779,22 @@ def smart_candidate_search(
                     city_filter,
                     min_connections,
                     skip_big_companies,
-                    st,
+                    round_status,
                 )
 
                 if not round_profiles:
-                    st.write(f"\u26aa Round {round_num + 1}: All profiles filtered out")
+                    round_status.write(f"\u26aa Round {round_num + 1}: All profiles filtered out")
+                    round_status.update(
+                        label=f"\u26aa Round {round_num + 1} \u2014 All filtered out",
+                        state="complete"
+                    )
                     time.sleep(0.5)
                     continue
 
                 # ---- STEP 5: Gemini AI Analysis ----
                 if gemini_key and st.session_state.get("_gemini_call_count", 0) < MAX_GEMINI_CALLS:
                     round_profiles = analyze_candidates_batch(
-                        round_profiles, search_keyword, gemini_key, st
+                        round_profiles, search_keyword, gemini_key, round_status
                     )
                 else:
                     for p in round_profiles:
@@ -1739,10 +1822,15 @@ def smart_candidate_search(
                 # ---- Round summary ----
                 tier_a_round = sum(1 for p in round_profiles if p.get("tier") == "A")
                 tier_b_round = sum(1 for p in round_profiles if p.get("tier") == "B")
-                st.write(
+                round_status.write(
                     f"\u2705 Round {round_num + 1}: +{len(round_profiles)} approved "
                     f"(\U0001f7e2 {tier_a_round}A, \U0001f535 {tier_b_round}B) \u2014 "
                     f"Total: {len(all_profiles)}/{target_count}"
+                )
+                round_status.update(
+                    label=f"\u2705 Round {round_num + 1} \u2014 +{len(round_profiles)} candidates "
+                          f"(\U0001f7e2 {tier_a_round}A \U0001f535 {tier_b_round}B)",
+                    state="complete"
                 )
 
             # Update progress
@@ -1881,25 +1969,32 @@ def compute_contactability(contacts: dict) -> str:
 
 
 def compute_tier(profile: dict) -> str:
-    """Compute candidate tier based on fit score, contacts, and recommendation."""
+    """Compute candidate tier. Made practical for real-world HR use."""
     analysis = profile.get("analysis", {})
     fit_score = analysis.get("fit_score", 0)
     hire_rec = analysis.get("hire_recommendation", "")
+    role_match = analysis.get("role_match", "")
     contactability = profile.get("contactability", "linkedin_only")
     has_direct_contact = contactability in ["highly_reachable", "reachable"]
+    has_any_contact = contactability != "linkedin_only"
 
-    # Tier A: fit >= 75 + direct contact + recommended
-    if fit_score >= 75 and has_direct_contact and hire_rec in ["strongly_recommended", "recommended"]:
+    # Tier A: Strong fit + some way to reach them
+    if fit_score >= 70 and (has_direct_contact or has_any_contact) and hire_rec in ["strongly_recommended", "recommended"]:
         return "A"
-    # Tier B: fit >= 60 + (contact OR strong match)
-    elif fit_score >= 60 and (has_direct_contact or analysis.get("role_match") == "strong_match"):
+    # Tier A (alt): Very high fit even without contact (worth LinkedIn InMail)
+    if fit_score >= 80 and hire_rec in ["strongly_recommended", "recommended"]:
+        return "A"
+    # Tier B: Good fit + recommended/maybe
+    if fit_score >= 60 and role_match in ["strong_match", "partial_match"] and hire_rec in ["strongly_recommended", "recommended", "maybe"]:
         return "B"
-    # Tier C: fit >= 40 + not "no_match"
-    elif fit_score >= 40 and analysis.get("role_match") != "no_match":
+    # Tier B (alt): Has direct contact + decent fit
+    if fit_score >= 50 and has_direct_contact:
+        return "B"
+    # Tier C: Moderate fit
+    if fit_score >= 35 and role_match != "no_match":
         return "C"
-    # Tier D: everything else
-    else:
-        return "D"
+    # Tier D: Everything else
+    return "D"
 
 
 TIER_DISPLAY = {
@@ -2310,9 +2405,16 @@ if search_clicked:
         serper_key = keys["SERPER_API_KEY"]
         gemini_key = keys.get("GOOGLE_API_KEY", "")
 
+        # Clean search keyword for better Google dorking results
+        # (keep original search_keyword for display/history)
+        clean_keyword = search_keyword.strip()
+        for char in ['&', '+', '/', '\\', '|', ';']:
+            clean_keyword = clean_keyword.replace(char, ' ')
+        clean_keyword = ' '.join(clean_keyword.split())
+
         # ---- Run Master Orchestrator (Phase 6) ----
         all_profiles = smart_candidate_search(
-            search_keyword=search_keyword,
+            search_keyword=clean_keyword,
             experience_filter=experience_filter,
             industry_filter=industry_filter,
             city_filter=city_filter,
@@ -2545,8 +2647,8 @@ if profiles:
 
         if view_mode == "📇 Card View":
             for i, p in enumerate(filtered_profiles):
-                name_display = p.get("name", "Unknown Profile")
-                headline_display = p.get("headline", "No headline available")
+                name_display = p.get("name", "Unknown")
+                headline_display = p.get("headline", "")
                 org_display = p.get("current_company") or p.get("organization", "")
                 role_display = p.get("current_role", "")
                 location_display = p.get("location", "")
@@ -2560,8 +2662,8 @@ if profiles:
                 fit_score = analysis.get("fit_score", 0)
                 hire_rec = analysis.get("hire_recommendation", "")
                 reason = analysis.get("reason", "")
-                ai_green_flags = analysis.get("green_flags", [])
-                ai_red_flags = analysis.get("red_flags", [])
+                green_flags = analysis.get("green_flags", [])
+                red_flags = analysis.get("red_flags", [])
 
                 tier = p.get("tier", "D")
                 tier_info = TIER_DISPLAY.get(tier, TIER_DISPLAY["D"])
@@ -2569,109 +2671,81 @@ if profiles:
                 contactability = p.get("contactability", "linkedin_only")
                 recruiter_note = p.get("recruiter_note", "")
 
-                if fit_score >= 80:
-                    score_color = "#2E7D32"; score_bg = "#E8F5E9"
-                elif fit_score >= 60:
-                    score_color = "#F57F17"; score_bg = "#FFF8E1"
-                elif fit_score >= 40:
-                    score_color = "#E65100"; score_bg = "#FFF3E0"
-                else:
-                    score_color = "#C62828"; score_bg = "#FFEBEE"
+                # Use st.container with border for each card
+                with st.container(border=True):
+                    # Row 1: Name + badges
+                    badge_parts = [f"**{name_display}**"]
+                    badge_parts.append(f"{'🟢' if tier == 'A' else '🔵' if tier == 'B' else '🟡' if tier == 'C' else '🔴'} Tier {tier}")
+                    if is_enriched:
+                        badge_parts.append("✨ Enriched")
+                    badge_parts.append(f"🎯 {fit_score}/100")
+                    badge_parts.append(CONTACTABILITY_DISPLAY.get(contactability, "🔗 LinkedIn Only"))
+                    st.markdown(" · ".join(badge_parts))
 
-                extra_html = ""
-                if is_enriched:
-                    badges = []
+                    # Row 2: Role + Company
+                    if role_display and org_display:
+                        st.markdown(f"**{role_display}** at **{org_display}**")
+                    elif headline_display:
+                        st.markdown(f"*{headline_display}*")
+                    elif org_display:
+                        st.markdown(f"🏢 {org_display}")
+
+                    # Row 3: Location + Connections + Education
+                    info_parts = []
                     if location_display:
-                        badges.append(f'\U0001f4cd {location_display}')
+                        info_parts.append(f"📍 {location_display}")
                     if connections:
-                        badges.append(f'\U0001f517 {connections:,} connections')
+                        info_parts.append(f"🔗 {connections:,} connections")
                     if education_display:
-                        badges.append(f'\U0001f393 {education_display[:60]}')
-                    if badges:
-                        extra_html += f'<div style="font-size:0.8rem; color:#636e72; margin-top:6px;">{", ".join(badges)}</div>'
+                        info_parts.append(f"🎓 {education_display[:60]}")
+                    if info_parts:
+                        st.caption(" · ".join(info_parts))
+
+                    # Row 4: Skills
                     if skills_list:
-                        skills_html = " ".join(
-                            [f'<span style="background:#f0eeff; color:#6C5CE7; padding:2px 8px; border-radius:6px; font-size:0.72rem; font-weight:500; margin-right:4px;">{s}</span>'
-                             for s in skills_list[:6]]
-                        )
-                        extra_html += f'<div style="margin-top:6px;">{skills_html}</div>'
+                        st.markdown(" ".join([f"`{s}`" for s in skills_list[:6]]))
 
-                contact_html = ""
-                contact_items = []
-                if contacts.get("emails"):
-                    contact_items.append(f'\U0001f4e7 {contacts["emails"][0]}')
-                if contacts.get("phones"):
-                    contact_items.append(f'\U0001f4de {contacts["phones"][0]}')
-                if contacts.get("github"):
-                    contact_items.append(f'\U0001f431 {contacts["github"]}')
-                if contacts.get("websites"):
-                    contact_items.append(f'\U0001f310 {contacts["websites"][0][:40]}')
-                if contact_items:
-                    contact_html = f'<div style="font-size:0.78rem; color:#2d3436; margin-top:6px;">{", ".join(contact_items)}</div>'
+                    # Row 5: Contact info
+                    contact_parts = []
+                    if contacts.get("emails"):
+                        contact_parts.append(f"📧 {contacts['emails'][0]}")
+                    if contacts.get("phones"):
+                        contact_parts.append(f"📱 {contacts['phones'][0]}")
+                    if contacts.get("github"):
+                        contact_parts.append(f"💻 {contacts['github']}")
+                    if contacts.get("websites"):
+                        contact_parts.append(f"🌐 {contacts['websites'][0][:40]}")
+                    if contact_parts:
+                        st.markdown(" · ".join(contact_parts))
 
-                ai_html = ""
-                if analysis:
-                    flags_html = ""
-                    if ai_green_flags:
-                        flags_html += " ".join([f'<span style="color:#2E7D32; font-size:0.72rem;">\u2713 {f}</span>' for f in ai_green_flags[:3]])
-                    if ai_red_flags:
-                        flags_html += " " + " ".join([f'<span style="color:#C62828; font-size:0.72rem;">\u26a0 {f}</span>' for f in ai_red_flags[:2]])
-                    ai_html = f"""
-                    <div style="margin-top:8px; padding:8px 12px; background:{score_bg}; border-radius:8px; display:flex; align-items:center; gap:12px;">
-                        <div style="font-size:1.4rem; font-weight:700; color:{score_color}; min-width:40px;">{fit_score}</div>
-                        <div style="flex:1;">
-                            <div style="font-size:0.78rem; font-weight:600; color:{score_color};">{hire_rec.replace('_', ' ').title()}</div>
-                            <div style="font-size:0.72rem; color:#555;">{reason[:80]}</div>
-                            <div style="margin-top:3px;">{flags_html}</div>
-                        </div>
-                    </div>
-                    """
+                    # Row 6: AI Analysis
+                    col_score, col_analysis, col_link = st.columns([1, 4, 1])
+                    with col_score:
+                        if fit_score >= 70:
+                            st.success(f"**{fit_score}**/100")
+                        elif fit_score >= 50:
+                            st.warning(f"**{fit_score}**/100")
+                        else:
+                            st.error(f"**{fit_score}**/100")
 
-                note_html = ""
-                if recruiter_note and tier in ["A", "B"]:
-                    note_html = f"""
-                    <div style="margin-top:6px; padding:6px 10px; background:#F3E5F5; border-left:3px solid #8E24AA; border-radius:4px; font-size:0.72rem; color:#4A148C;">
-                        \U0001f4dd {recruiter_note[:200]}
-                    </div>
-                    """
+                    with col_analysis:
+                        rec_display = hire_rec.replace("_", " ").title() if hire_rec else "Pending"
+                        st.markdown(f"**{rec_display}** — {reason[:100]}" if reason else f"**{rec_display}**")
+                        flag_text = ""
+                        if green_flags:
+                            flag_text += " ".join([f"✅ {f}" for f in green_flags[:3]])
+                        if red_flags:
+                            flag_text += "  " + " ".join([f"⚠️ {f}" for f in red_flags[:2]])
+                        if flag_text:
+                            st.caption(flag_text)
 
-                # Pre-compute emoji strings to avoid backslash in f-strings
-                target_emoji = '\U0001f3af'
-                org_emoji = '\U0001f3e2'
-                arrow_char = '\u2192'
-                org_line = f'<div class="profile-org">{org_emoji} {org_display}</div>' if org_display and not role_display else ''
-                tier_badge = f'<span style="background:{tier_info["bg"]}; color:{tier_info["color"]}; padding:2px 8px; border-radius:6px; font-size:0.7rem; font-weight:700;">{tier_info["emoji"]} {tier_info["label"]}</span>'
-                enrichment_badge = '<span style="background:#E8F5E9; color:#2E7D32; padding:2px 8px; border-radius:6px; font-size:0.7rem; font-weight:600;">\u2728 Enriched</span>' if is_enriched else ''
-                contactability_label = CONTACTABILITY_DISPLAY.get(contactability, "\U0001f517 LinkedIn Only")
+                    with col_link:
+                        if url:
+                            st.link_button("View Profile →", url)
 
-                st.markdown(f"""
-                <div class="profile-card">
-                    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                        <div style="flex: 1;">
-                            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                                <div class="profile-name">{name_display}</div>
-                                {tier_badge}
-                                {enrichment_badge}
-                                <span style="background:{score_bg}; color:{score_color}; padding:2px 8px; border-radius:6px; font-size:0.7rem; font-weight:700;">{target_emoji} {fit_score}</span>
-                                <span style="font-size:0.7rem; color:#636e72;">{contactability_label}</span>
-                            </div>
-                            <div class="profile-headline">{role_display + ' at ' + org_display if role_display and org_display else headline_display}</div>
-                            {org_line}
-                            {extra_html}
-                            {contact_html}
-                            {ai_html}
-                            {note_html}
-                        </div>
-                        <a href="{url}" target="_blank" style="
-                            background: linear-gradient(135deg, #0077B5, #005885);
-                            color: white; padding: 6px 14px; border-radius: 8px;
-                            text-decoration: none; font-size: 0.8rem; font-weight: 600;
-                            box-shadow: 0 2px 8px rgba(0,119,181,0.3);
-                            white-space: nowrap;
-                        ">View Profile {arrow_char}</a>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                    # Row 7: Recruiter Note (Tier A/B only)
+                    if recruiter_note and tier in ["A", "B"]:
+                        st.info(f"📝 {recruiter_note[:200]}")
 
         else:
             # Table View
@@ -2788,14 +2862,16 @@ if profiles:
             top_df = pd.DataFrame(top_tier_data)
             csv_buffer2 = io.StringIO()
             top_df.to_csv(csv_buffer2, index=False)
-
             st.download_button(
-                label="\u2b50 Download Tier A+B (CSV)",
+                label=f"⭐ Download Tier A+B ({len(top_tier_data)} candidates)",
                 data=csv_buffer2.getvalue(),
                 file_name=f"top_candidates_{search_keyword.replace(' ', '_') if search_keyword else 'export'}.csv",
                 mime="text/csv",
                 use_container_width=True,
             )
+        else:
+            st.button("⭐ Download Tier A+B (0 candidates)", disabled=True, use_container_width=True)
+            st.caption("No Tier A or B candidates found. Try broader keywords.")
 
 elif not st.session_state.get("search_running", False):
     # Welcome State
