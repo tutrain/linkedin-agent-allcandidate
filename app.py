@@ -500,60 +500,94 @@ def generate_candidate_queries(keyword: str, experience_levels: list, industries
     """Generate Serper.dev search queries using Google dork syntax.
     Each round produces DIFFERENT queries to avoid duplicate results."""
     queries = []
-
-    # Sanitize keyword: remove special characters that break Google dorking
+    
+    # Sanitize keyword
     kw = keyword.strip()
-    # Replace common separators with spaces
     for char in ['&', '+', '/', '\\', '|', ';', ':', ',']:
         kw = kw.replace(char, ' ')
-    # Collapse multiple spaces
     kw = ' '.join(kw.split())
-
+    
+    # Check if we have specific cities to target
+    has_specific_cities = cities and "All Cities" not in cities and len(cities) > 0
+    
     if round_num == 0:
-        queries = [
-            f'site:linkedin.com/in/ "{kw}" India',
-            f'site:linkedin.com/in/ "{kw}" "experience" India',
-            f'site:linkedin.com/in/ "{kw}" "currently working"',
-            f'site:linkedin.com/in/ "{kw}" "open to work"',
-            f'site:linkedin.com/in/ "{kw}" "looking for opportunities"',
-        ]
+        if has_specific_cities:
+            # When cities are specified, USE THEM in round 0 queries
+            # Pick first 5 cities for round 0
+            round_cities = cities[:5]
+            for city in round_cities:
+                queries.append(f'site:linkedin.com/in/ "{kw}" "{city}"')
+            # Also add one broad query with the state/region context
+            queries.append(f'site:linkedin.com/in/ "{kw}" India')
+        else:
+            queries = [
+                f'site:linkedin.com/in/ "{kw}" India',
+                f'site:linkedin.com/in/ "{kw}" "experience" India',
+                f'site:linkedin.com/in/ "{kw}" "currently working"',
+                f'site:linkedin.com/in/ "{kw}" "open to work"',
+                f'site:linkedin.com/in/ "{kw}" "looking for opportunities"',
+            ]
+    
     elif round_num == 1:
-        queries = [
-            f'site:linkedin.com/in/ "{kw}" "years of experience"',
-            f'site:linkedin.com/in/ "{kw}" "skills" "projects"',
-            f'site:linkedin.com/in/ "{kw}" "certified" OR "certification"',
-            f'site:linkedin.com/in/ "{kw}" "professional" "experienced"',
-            f'site:linkedin.com/in/ "{kw}" "resume" OR "portfolio"',
-        ]
+        if has_specific_cities:
+            # Use next batch of cities
+            round_cities = cities[5:12]
+            for city in round_cities:
+                queries.append(f'site:linkedin.com/in/ "{kw}" "{city}"')
+            if not round_cities:
+                # Fewer than 5 cities total — reuse with different query patterns
+                for city in cities[:5]:
+                    queries.append(f'site:linkedin.com/in/ "{kw}" "experience" {city}')
+        else:
+            queries = [
+                f'site:linkedin.com/in/ "{kw}" "years of experience"',
+                f'site:linkedin.com/in/ "{kw}" "skills" "projects"',
+                f'site:linkedin.com/in/ "{kw}" "certified" OR "certification"',
+                f'site:linkedin.com/in/ "{kw}" "professional" "experienced"',
+                f'site:linkedin.com/in/ "{kw}" "resume" OR "portfolio"',
+            ]
+    
     elif 2 <= round_num <= 5:
-        all_cities = [c for c in (cities or []) if c != "All Cities"]
-        if not all_cities:
-            all_cities = CITIES_LIST
+        all_cities = cities if has_specific_cities else CITIES_LIST
         start_idx = (round_num - 2) * 6
         round_cities = all_cities[start_idx:start_idx + 6]
         for city in round_cities:
-            queries.append(f'site:linkedin.com/in/ "{kw}" {city}')
+            queries.append(f'site:linkedin.com/in/ "{kw}" "{city}"')
             queries.append(f'site:linkedin.com/in/ "{kw}" "hiring" OR "available" {city}')
+    
     elif 6 <= round_num <= 8:
-        industry_terms = []
-        for ind in (industries or []):
-            if ind != "All Industries" and ind in INDUSTRY_KEYWORDS:
-                industry_terms.extend(INDUSTRY_KEYWORDS[ind][:2])
-        if not industry_terms:
-            industry_terms = ["technology", "finance", "healthcare", "education"]
-        start_idx = (round_num - 6) * 3
-        for term in industry_terms[start_idx:start_idx + 3]:
-            queries.append(f'site:linkedin.com/in/ "{kw}" "{term}" India')
-            queries.append(f'site:linkedin.com/in/ "{kw}" "{term}"')
+        if has_specific_cities:
+            # Re-run city queries with alternate phrasings
+            start_idx = (round_num - 6) * 6
+            round_cities = cities[start_idx:start_idx + 6]
+            for city in round_cities:
+                queries.append(f'site:linkedin.com/in/ "{kw}" "executive" {city}')
+                queries.append(f'site:linkedin.com/in/ "{kw}" "manager" {city}')
+        else:
+            industry_terms = []
+            for ind in (industries or []):
+                if ind != "All Industries" and ind in INDUSTRY_KEYWORDS:
+                    industry_terms.extend(INDUSTRY_KEYWORDS[ind][:2])
+            if not industry_terms:
+                industry_terms = ["technology", "finance", "healthcare", "education"]
+            start_idx = (round_num - 6) * 3
+            for term in industry_terms[start_idx:start_idx + 3]:
+                queries.append(f'site:linkedin.com/in/ "{kw}" "{term}" India')
+                queries.append(f'site:linkedin.com/in/ "{kw}" "{term}"')
+    
     else:
         page_num = round_num - 8
-        queries = [
-            f'site:linkedin.com/in/ "{kw}" India',
-            f'site:linkedin.com/in/ "{kw}" "experience"',
-            f'site:linkedin.com/in/ "{kw}" "currently working"',
-        ]
+        if has_specific_cities:
+            for city in cities[:3]:
+                queries.append(f'site:linkedin.com/in/ "{kw}" "{city}"')
+        else:
+            queries = [
+                f'site:linkedin.com/in/ "{kw}" India',
+                f'site:linkedin.com/in/ "{kw}" "experience"',
+                f'site:linkedin.com/in/ "{kw}" "currently working"',
+            ]
         return queries, page_num
-
+    
     return queries, 1
 
 
@@ -932,7 +966,7 @@ def _parse_apify_profile_item(item: dict) -> dict:
             profile_picture_url = str(val)
             break
 
-    return {
+    result = {
         "url": linkedin_url,
         "name": full_name,
         "headline": headline,
@@ -954,6 +988,7 @@ def _parse_apify_profile_item(item: dict) -> dict:
         "profile_picture_url": profile_picture_url,
         "profile_type": "individual",
     }
+    return _sanitize_profile_fields(result)
 
 
 def scrape_linkedin_profiles(urls: list, apify_manager: ApifyKeyManager, status_container) -> list:
@@ -1113,9 +1148,10 @@ def enrich_discovered_profiles(discovered: list, apify_manager: ApifyKeyManager,
         f"✅ Enriched {enriched_count}/{len(urls_to_enrich)} profiles — Cost: {apify_manager.get_cost_summary()}"
     )
 
-    # Post-enrichment: extract missing fields from text
+    # Post-enrichment: extract missing fields from text, then sanitize all fields
     for p in result:
         _post_enrich_extract(p)
+        _sanitize_profile_fields(p)
 
     return result
 
@@ -1174,6 +1210,137 @@ def _post_enrich_extract(profile: dict) -> dict:
             profile["connections"] = int(conn_clean)
         except ValueError:
             profile["connections"] = 0
+
+    return profile
+
+
+def _sanitize_profile_fields(profile: dict) -> dict:
+    """Ensure all display fields are clean strings, not raw dicts/lists.
+    This is the LAST step before a profile is used for display/export."""
+
+    # --- Fix current_role if it's a list/dict ---
+    role = profile.get("current_role", "")
+    if isinstance(role, (list, dict)):
+        if isinstance(role, list) and role:
+            first = role[0] if isinstance(role[0], dict) else {}
+            extracted_role = (
+                first.get("title", "") or
+                first.get("position", "") or
+                first.get("role", "") or
+                ""
+            )
+            profile["current_role"] = str(extracted_role).strip()
+        elif isinstance(role, dict):
+            profile["current_role"] = (
+                role.get("title", "") or
+                role.get("position", "") or
+                role.get("role", "") or
+                ""
+            )
+        else:
+            profile["current_role"] = ""
+    elif role and not isinstance(role, str):
+        profile["current_role"] = str(role)
+
+    # --- Fix current_company if it's a list/dict ---
+    company = profile.get("current_company", "")
+    if isinstance(company, (list, dict)):
+        if isinstance(company, list) and company:
+            first = company[0] if isinstance(company[0], dict) else {}
+            profile["current_company"] = (
+                first.get("companyName", "") or
+                first.get("company", "") or
+                first.get("name", "") or
+                ""
+            )
+        elif isinstance(company, dict):
+            profile["current_company"] = (
+                company.get("companyName", "") or
+                company.get("company", "") or
+                company.get("name", "") or
+                ""
+            )
+        else:
+            profile["current_company"] = ""
+    elif company and not isinstance(company, str):
+        profile["current_company"] = str(company)
+
+    # --- Fix headline if it's a list/dict ---
+    headline = profile.get("headline", "")
+    if isinstance(headline, (list, dict)):
+        profile["headline"] = str(headline)[:200] if headline else ""
+
+    # --- Fix location if it's a dict ---
+    location = profile.get("location", "")
+    if isinstance(location, dict):
+        profile["location"] = (
+            location.get("city", "") or
+            location.get("full", "") or
+            location.get("name", "") or
+            location.get("default", "") or
+            ""
+        )
+    elif location and not isinstance(location, str):
+        profile["location"] = str(location)
+
+    # --- Fix education if it's a list ---
+    education = profile.get("education", "")
+    if isinstance(education, (list, dict)):
+        if isinstance(education, list) and education:
+            first = education[0] if isinstance(education[0], dict) else {}
+            school = first.get("school", first.get("schoolName", first.get("institution", "")))
+            degree = first.get("degree", first.get("degreeName", ""))
+            field = first.get("field", first.get("fieldOfStudy", ""))
+            parts = [p for p in [degree, field, school] if p and isinstance(p, str)]
+            profile["education"] = " | ".join(parts)
+        else:
+            profile["education"] = ""
+
+    # --- Fix skills if entries are dicts ---
+    skills = profile.get("skills", [])
+    if isinstance(skills, list):
+        clean_skills = []
+        for s in skills:
+            if isinstance(s, dict):
+                clean_skills.append(s.get("name", s.get("skill", "")))
+            elif isinstance(s, str) and s.strip():
+                clean_skills.append(s.strip())
+        profile["skills"] = [s for s in clean_skills if s]
+    elif isinstance(skills, str):
+        profile["skills"] = [s.strip() for s in skills.split(",") if s.strip()]
+
+    # --- Fix about if it contains raw data ---
+    about = profile.get("about", "")
+    if isinstance(about, (list, dict)):
+        profile["about"] = str(about)[:500] if about else ""
+
+    # --- After sanitizing, run headline parsing for any still-missing fields ---
+    headline = profile.get("headline", "")
+    if headline and isinstance(headline, str):
+        if not profile.get("current_role"):
+            if " at " in headline:
+                parts = headline.split(" at ", 1)
+                profile["current_role"] = parts[0].strip()[:100]
+                if not profile.get("current_company"):
+                    profile["current_company"] = parts[1].strip().split("|")[0].strip()[:100]
+            elif " | " in headline:
+                parts = headline.split(" | ", 1)
+                profile["current_role"] = parts[0].strip()[:100]
+                if not profile.get("current_company"):
+                    profile["current_company"] = parts[1].strip()[:100]
+            elif " - " in headline:
+                parts = headline.split(" - ", 1)
+                profile["current_role"] = parts[0].strip()[:100]
+                if not profile.get("current_company"):
+                    profile["current_company"] = parts[1].strip()[:100]
+            else:
+                profile["current_role"] = headline[:100]
+
+    # --- Ensure organization is synced ---
+    if not profile.get("current_company") and profile.get("organization"):
+        org = profile["organization"]
+        if isinstance(org, str):
+            profile["current_company"] = org
 
     return profile
 
@@ -1253,29 +1420,59 @@ def _filter_keyword_relevance(profile: dict, keyword: str) -> tuple[bool, str]:
 
 
 def _filter_location(profile: dict, selected_cities: list) -> tuple[bool, str]:
-    """Filter 3: Location matching with alias support. Unknown location → PASS."""
+    """Location filter — balances strictness with practicality.
+    When state/city filter is active, checks multiple signals."""
+    
+    # No filter at all
     if not selected_cities or "All Cities" in selected_cities:
-        return True, ""
-
-    location = (profile.get("location") or "").strip().lower()
-
-    # Unknown location → benefit of doubt
-    if not location:
-        return True, ""
-
-    # Check direct match
-    for city in selected_cities:
-        city_lower = city.lower()
-        if city_lower in location or location in city_lower:
+        restricted_states = st.session_state.get("_location_filter_states", [])
+        if not restricted_states:
             return True, ""
-
-        # Check aliases
-        aliases = CITY_ALIASES.get(city_lower, [])
-        for alias in aliases:
-            if alias in location:
-                return True, ""
-
-    return False, f"Location mismatch ({location[:30]})"
+        # Fall through to state-level checking below
+        selected_cities = st.session_state.get("_location_filter_cities", [])
+        if not selected_cities:
+            return True, ""
+    
+    # Build all valid location terms (cities + states + aliases)
+    valid_terms = set()
+    for city in selected_cities:
+        valid_terms.add(city.lower())
+        # Add aliases
+        for alias_key, alias_list in CITY_ALIASES.items():
+            if city.lower() == alias_key or city.lower() in alias_list:
+                valid_terms.add(alias_key)
+                valid_terms.update(alias_list)
+    
+    # Add state names as valid terms
+    restricted_states = st.session_state.get("_location_filter_states", [])
+    for state in restricted_states:
+        valid_terms.add(state.lower())
+    
+    # Combine all searchable text from the profile
+    location = (profile.get("location") or "").strip().lower()
+    headline = (profile.get("headline") or "").lower()
+    about = (profile.get("about") or profile.get("snippet") or "").lower()
+    combined_text = f"{location} {headline} {about}"
+    
+    # Check 1: Does any valid term appear in any profile text?
+    for term in valid_terms:
+        if len(term) >= 3 and term in combined_text:
+            return True, f"Location match: {term}"
+    
+    # Check 2: If location is empty/generic, give benefit of doubt for enriched profiles
+    if not location or location in ["india", "in", ""]:
+        if profile.get("enrichment_status") == "enriched":
+            return True, "Unknown location — passing enriched profile"
+        # For serper-only, check if snippet mentions any city
+        snippet = (profile.get("snippet") or "").lower()
+        for term in valid_terms:
+            if len(term) >= 3 and term in snippet:
+                return True, f"City found in snippet: {term}"
+        # Truly unknown — reject
+        return False, "Unknown location (state filter active)"
+    
+    # Check 3: Location is present but doesn't match — REJECT
+    return False, f"Location mismatch: {location[:30]}"
 
 
 def _filter_connections(profile: dict, min_connections: int) -> tuple[bool, str]:
@@ -1746,19 +1943,50 @@ def smart_candidate_search(
                 round_profiles = new_profiles
 
                 if not round_profiles:
-                    round_status.write(f"\u26aa Round {round_num + 1}: All profiles were duplicates")
+                    round_status.write(f"⚪ Round {round_num + 1}: All profiles were duplicates")
                     round_status.update(
-                        label=f"\u26aa Round {round_num + 1} \u2014 All duplicates",
+                        label=f"⚪ Round {round_num + 1} — All duplicates",
                         state="complete"
                     )
                     time.sleep(0.5)
                     continue
+
+                # ---- PRE-FILTER: Quick location check before spending Apify credits ----
+                if city_filter or st.session_state.get("_location_filter_states"):
+                    pre_filtered = []
+                    for p in round_profiles:
+                        # Check if any city/state term appears in name, headline, snippet, or organization
+                        combined = f"{p.get('name', '')} {p.get('headline', '')} {p.get('snippet', '')} {p.get('organization', '')}".lower()
+                        valid_terms = [c.lower() for c in (city_filter or st.session_state.get("_location_filter_cities", []))]
+                        valid_terms += [s.lower() for s in st.session_state.get("_location_filter_states", [])]
+                        
+                        # Pass if any city/state term found, OR if no location info (benefit of doubt)
+                        has_location_signal = any(term in combined for term in valid_terms if len(term) >= 3)
+                        has_any_text = len(combined.strip()) > 10
+                        
+                        if has_location_signal or not has_any_text:
+                            pre_filtered.append(p)
+                    
+                    if len(pre_filtered) < len(round_profiles):
+                        rejected_count = len(round_profiles) - len(pre_filtered)
+                        round_status.write(f"🗺️ Pre-filter: {rejected_count} profiles clearly outside target area")
+                    round_profiles = pre_filtered
+                    
+                    if not round_profiles:
+                        round_status.write(f"⚪ No profiles in target area from this round")
+                        round_status.update(label=f"⚪ Round {round_num + 1} — No profiles in target area", state="complete")
+                        continue
 
                 # ---- STEP 3: Enrich via Apify ----
                 if apify_manager.has_keys() and not apify_manager.is_exhausted() and total_apify_scrapes < MAX_APIFY_SCRAPES:
                     # Warn before using paid key
                     if apify_manager.is_using_paid_key():
                         round_status.write("\u26a0\ufe0f Now using PAID Apify key. Monitor costs carefully.")
+
+                    # Limit to only what we need (don't waste Apify credits)
+                    remaining_needed = target_count - len(all_profiles)
+                    if len(round_profiles) > remaining_needed * 2:
+                        round_profiles = round_profiles[:remaining_needed * 2]  # 2x buffer for filter losses
 
                     round_profiles = enrich_discovered_profiles(
                         round_profiles, apify_manager, round_status
@@ -1814,8 +2042,11 @@ def smart_candidate_search(
                     else:
                         p["recruiter_note"] = f"{name} discovered during LinkedIn search for '{search_keyword}'."
 
-                # ---- Collect approved profiles ----
+                # ---- Collect approved profiles (respect target count) ----
                 for p in round_profiles:
+                    if len(all_profiles) >= target_count:
+                        break  # Stop adding once target is reached
+                    _sanitize_profile_fields(p)  # Ensure clean data before storing
                     st.session_state.setdefault("all_discovered_urls", set()).add(p["url"])
                     all_profiles.append(p)
 
@@ -2412,12 +2643,41 @@ if search_clicked:
             clean_keyword = clean_keyword.replace(char, ' ')
         clean_keyword = ' '.join(clean_keyword.split())
 
+        # Resolve actual cities from hierarchical filter
+        actual_search_cities = []
+        if city_filter and "All Cities" not in city_filter:
+            actual_search_cities = city_filter
+        elif selected_state_names:
+            # "All Cities" selected but state filter is active
+            # → use only cities from selected states
+            for region in INDIA_REGIONS.values():
+                for state, state_cities in region.items():
+                    if state in selected_state_names:
+                        actual_search_cities.extend(state_cities)
+        # else: actual_search_cities stays empty = truly all cities
+        
+        # Store for the location filter function
+        st.session_state["_location_filter_states"] = selected_state_names
+        st.session_state["_location_filter_cities"] = actual_search_cities
+
+        # Warn about restrictive filters
+        warning_parts = []
+        if min_connections >= 300:
+            warning_parts.append(f"Min connections ({min_connections}) is very high — most profiles have 100-300")
+        if skip_big_companies:
+            warning_parts.append("Big company filter active — excludes major employers")
+        if actual_search_cities and len(actual_search_cities) < 10:
+            warning_parts.append(f"Location restricted to {len(actual_search_cities)} cities")
+        
+        if len(warning_parts) >= 2:
+            st.warning(f"⚠️ Restrictive filters may reduce results: {'; '.join(warning_parts)}")
+
         # ---- Run Master Orchestrator (Phase 6) ----
         all_profiles = smart_candidate_search(
             search_keyword=clean_keyword,
             experience_filter=experience_filter,
             industry_filter=industry_filter,
-            city_filter=city_filter,
+            city_filter=actual_search_cities if actual_search_cities else city_filter,
             min_connections=min_connections,
             skip_big_companies=skip_big_companies,
             target_count=target_count,
@@ -2682,11 +2942,13 @@ if profiles:
                     badge_parts.append(CONTACTABILITY_DISPLAY.get(contactability, "🔗 LinkedIn Only"))
                     st.markdown(" · ".join(badge_parts))
 
-                    # Row 2: Role + Company
-                    if role_display and org_display:
-                        st.markdown(f"**{role_display}** at **{org_display}**")
+                    # Row 2: Role + Company (truncated for readability)
+                    role_text = (role_display[:80] + "...") if len(role_display) > 80 else role_display
+                    if role_text and org_display:
+                        st.markdown(f"**{role_text}** at **{org_display}**")
                     elif headline_display:
-                        st.markdown(f"*{headline_display}*")
+                        headline_short = (headline_display[:100] + "...") if len(headline_display) > 100 else headline_display
+                        st.markdown(f"*{headline_short}*")
                     elif org_display:
                         st.markdown(f"🏢 {org_display}")
 
@@ -2755,13 +3017,22 @@ if profiles:
                 contacts = p.get("contacts", {})
                 t = p.get("tier", "D")
                 t_info = TIER_DISPLAY.get(t, TIER_DISPLAY["D"])
+                
+                # Safe string extraction (in case sanitization missed something)
+                role_val = p.get("current_role", p.get("headline", ""))
+                if isinstance(role_val, (list, dict)):
+                    role_val = ""
+                company_val = p.get("current_company") or p.get("organization", "")
+                if isinstance(company_val, (list, dict)):
+                    company_val = ""
+                
                 df_data.append({
                     "Tier": f"{t_info['emoji']} {t}",
                     "Score": analysis.get("fit_score", 0),
                     "Rec": {"strongly_recommended": "\U0001f7e2", "recommended": "\U0001f7e1", "maybe": "\U0001f7e0", "not_recommended": "\U0001f534"}.get(analysis.get("hire_recommendation", ""), "\u26aa"),
                     "Name": p.get("name", "Unknown"),
-                    "Role": p.get("current_role", p.get("headline", "")),
-                    "Company": p.get("current_company") or p.get("organization", ""),
+                    "Role": str(role_val)[:80] if role_val else "",
+                    "Company": str(company_val)[:60] if company_val else "",
                     "Email": contacts.get("emails", [""])[0] if contacts.get("emails") else "",
                     "Phone": contacts.get("phones", [""])[0] if contacts.get("phones") else "",
                     "Contact": CONTACTABILITY_DISPLAY.get(p.get("contactability", ""), ""),
