@@ -145,6 +145,56 @@ div.stButton > button[kind="primary"]:hover {
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 header {visibility: hidden;}
+
+/* ---- Download Button Explosion ---- */
+div[data-testid="stDownloadButton"] button:active {
+    animation: download-blast 0.6s ease-out !important;
+}
+@keyframes download-blast {
+    0% { transform: scale(1); box-shadow: 0 0 0 rgba(108,92,231,0.4); }
+    30% { transform: scale(1.15); box-shadow: 0 0 30px rgba(108,92,231,0.6), 0 0 60px rgba(0,184,148,0.3); }
+    60% { transform: scale(0.95); box-shadow: 0 0 15px rgba(253,203,110,0.5); }
+    100% { transform: scale(1); box-shadow: 0 0 0 rgba(108,92,231,0); }
+}
+div[data-testid="stDownloadButton"] button:active::after {
+    content: '💥';
+    position: absolute;
+    font-size: 2rem;
+    top: -20px;
+    right: -20px;
+    animation: blast-emoji 0.8s ease-out forwards;
+    pointer-events: none;
+}
+@keyframes blast-emoji {
+    0% { opacity: 1; transform: scale(0.5) rotate(0deg); }
+    50% { opacity: 1; transform: scale(1.5) rotate(180deg); }
+    100% { opacity: 0; transform: scale(2) rotate(360deg) translateY(-30px); }
+}
+
+/* ---- Sparkle effect on download buttons ---- */
+div[data-testid="stDownloadButton"] button {
+    position: relative;
+    overflow: visible;
+    transition: all 0.3s ease;
+}
+div[data-testid="stDownloadButton"] button:hover {
+    transform: scale(1.03);
+    box-shadow: 0 4px 20px rgba(108,92,231,0.3);
+}
+div[data-testid="stDownloadButton"] button:hover::before {
+    content: '✨';
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    font-size: 1rem;
+    animation: sparkle-spin 1s linear infinite;
+    pointer-events: none;
+}
+@keyframes sparkle-spin {
+    0% { transform: rotate(0deg) scale(1); }
+    50% { transform: rotate(180deg) scale(1.3); }
+    100% { transform: rotate(360deg) scale(1); }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1924,7 +1974,18 @@ def smart_candidate_search(
                         state="complete"
                     )
                     progress = min(len(all_profiles) / max(target_count, 1), 1.0)
-                    progress_bar.progress(progress, text=f"Found {len(all_profiles)}/{target_count}...")
+                    fun_messages = [
+                        f"🔍 Hunting for talent... {len(all_profiles)}/{target_count}",
+                        f"🎯 Locking on candidates... {len(all_profiles)}/{target_count}",
+                        f"🚀 Scouting LinkedIn... {len(all_profiles)}/{target_count}",
+                        f"💼 Building your dream team... {len(all_profiles)}/{target_count}",
+                        f"🧲 Attracting top talent... {len(all_profiles)}/{target_count}",
+                        f"⚡ Supercharging your pipeline... {len(all_profiles)}/{target_count}",
+                        f"🏆 Finding winners... {len(all_profiles)}/{target_count}",
+                        f"🎪 Gathering the best... {len(all_profiles)}/{target_count}",
+                    ]
+                    import random
+                    progress_bar.progress(progress, text=random.choice(fun_messages))
                     time.sleep(0.5)
                     continue
 
@@ -2066,7 +2127,18 @@ def smart_candidate_search(
 
             # Update progress
             progress = min(len(all_profiles) / max(target_count, 1), 1.0)
-            progress_bar.progress(progress, text=f"Found {len(all_profiles)}/{target_count} candidates...")
+            fun_messages = [
+                f"🔍 Hunting for talent... {len(all_profiles)}/{target_count}",
+                f"🎯 Locking on candidates... {len(all_profiles)}/{target_count}",
+                f"🚀 Scouting LinkedIn... {len(all_profiles)}/{target_count}",
+                f"💼 Building your dream team... {len(all_profiles)}/{target_count}",
+                f"🧲 Attracting top talent... {len(all_profiles)}/{target_count}",
+                f"⚡ Supercharging your pipeline... {len(all_profiles)}/{target_count}",
+                f"🏆 Finding winners... {len(all_profiles)}/{target_count}",
+                f"🎪 Gathering the best... {len(all_profiles)}/{target_count}",
+            ]
+            import random
+            progress_bar.progress(progress, text=random.choice(fun_messages))
             time.sleep(0.5)
 
         progress_bar.progress(1.0, text=f"\u2705 Deep search complete \u2014 {len(all_profiles)} candidates found!")
@@ -2712,6 +2784,122 @@ if search_clicked:
         reachable = sum(1 for p in all_profiles if p.get("contactability") in ["highly_reachable", "reachable"])
         st.success(f"\U0001f389 Found **{len(all_profiles)}** candidates \u2014 \U0001f7e2 {tier_a} Tier A, \U0001f535 {tier_b} Tier B, {reachable} directly reachable")
         st.caption(f"\U0001f4ca Serper: {stats.get('total_queries', 0)} queries | Apify: {stats.get('apify_cost', 'N/A')} | Gemini: {stats.get('gemini_calls', 0)} calls")
+        
+        # 🎆 Celebration animation when results are found
+        if len(all_profiles) > 0:
+            st.balloons()
+            st.markdown("""
+            <style>
+            @keyframes firework-burst {
+                0% { transform: scale(0); opacity: 1; }
+                50% { transform: scale(1); opacity: 0.8; }
+                100% { transform: scale(1.5); opacity: 0; }
+            }
+            @keyframes confetti-fall {
+                0% { transform: translateY(-100vh) rotate(0deg); opacity: 1; }
+                100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
+            }
+            @keyframes balloon-rise {
+                0% { transform: translateY(100vh) rotate(-5deg); opacity: 0.9; }
+                50% { transform: translateY(30vh) rotate(5deg); opacity: 1; }
+                100% { transform: translateY(-20vh) rotate(-3deg); opacity: 0; }
+            }
+            .celebration-overlay {
+                position: fixed;
+                top: 0; left: 0;
+                width: 100vw; height: 100vh;
+                pointer-events: none;
+                z-index: 99999;
+                overflow: hidden;
+                animation: celebration-fade 5s ease-out forwards;
+            }
+            @keyframes celebration-fade {
+                0% { opacity: 1; }
+                80% { opacity: 1; }
+                100% { opacity: 0; display: none; }
+            }
+            .confetti-piece {
+                position: absolute;
+                width: 10px; height: 10px;
+                top: -10px;
+                animation: confetti-fall linear forwards;
+            }
+            .balloon {
+                position: absolute;
+                font-size: 2.5rem;
+                bottom: -50px;
+                animation: balloon-rise ease-out forwards;
+            }
+            .firework-spark {
+                position: absolute;
+                width: 6px; height: 6px;
+                border-radius: 50%;
+                animation: firework-burst ease-out forwards;
+            }
+            </style>
+            <div class="celebration-overlay" id="celebrationOverlay">
+            </div>
+            <script>
+            (function() {
+                const overlay = document.getElementById('celebrationOverlay');
+                if (!overlay) return;
+                
+                const colors = ['#6C5CE7', '#00b894', '#fdcb6e', '#e17055', '#0984e3', '#d63031', '#00cec9', '#e84393', '#ffeaa7', '#55efc4'];
+                const emojis = ['🎈', '🎉', '🎊', '🎯', '⭐', '🏆', '💼', '🚀', '✨', '🎆'];
+                
+                // Confetti pieces
+                for (let i = 0; i < 80; i++) {
+                    const piece = document.createElement('div');
+                    piece.className = 'confetti-piece';
+                    piece.style.left = Math.random() * 100 + 'vw';
+                    piece.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+                    piece.style.animationDuration = (2 + Math.random() * 3) + 's';
+                    piece.style.animationDelay = Math.random() * 2 + 's';
+                    piece.style.borderRadius = Math.random() > 0.5 ? '50%' : '2px';
+                    piece.style.width = (6 + Math.random() * 10) + 'px';
+                    piece.style.height = (6 + Math.random() * 10) + 'px';
+                    overlay.appendChild(piece);
+                }
+                
+                // Balloons
+                for (let i = 0; i < 12; i++) {
+                    const balloon = document.createElement('div');
+                    balloon.className = 'balloon';
+                    balloon.textContent = emojis[Math.floor(Math.random() * emojis.length)];
+                    balloon.style.left = (5 + Math.random() * 90) + 'vw';
+                    balloon.style.animationDuration = (3 + Math.random() * 3) + 's';
+                    balloon.style.animationDelay = (0.5 + Math.random() * 2) + 's';
+                    balloon.style.fontSize = (1.5 + Math.random() * 2) + 'rem';
+                    overlay.appendChild(balloon);
+                }
+                
+                // Firework sparks
+                for (let burst = 0; burst < 5; burst++) {
+                    const cx = 10 + Math.random() * 80;
+                    const cy = 10 + Math.random() * 60;
+                    const delay = Math.random() * 2;
+                    for (let s = 0; s < 12; s++) {
+                        const spark = document.createElement('div');
+                        spark.className = 'firework-spark';
+                        const angle = (s / 12) * Math.PI * 2;
+                        const dist = 40 + Math.random() * 60;
+                        spark.style.left = cx + 'vw';
+                        spark.style.top = cy + 'vh';
+                        spark.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+                        spark.style.boxShadow = '0 0 6px ' + colors[Math.floor(Math.random() * colors.length)];
+                        spark.style.animationDuration = '1.2s';
+                        spark.style.animationDelay = delay + 's';
+                        spark.style.setProperty('--dx', Math.cos(angle) * dist + 'px');
+                        spark.style.setProperty('--dy', Math.sin(angle) * dist + 'px');
+                        overlay.appendChild(spark);
+                    }
+                }
+                
+                // Auto-remove after animation
+                setTimeout(() => { if (overlay) overlay.remove(); }, 6000);
+            })();
+            </script>
+            """, unsafe_allow_html=True)
 
 
 # ============================================================
